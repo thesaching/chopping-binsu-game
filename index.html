@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Slap Ninja: Nightmare Speed Edition</title>
+    <style>
+        body { 
+            margin: 0; background: #111; display: flex; justify-content: center; align-items: center; 
+            height: 100vh; font-family: 'Comic Sans MS', 'Chalkboard SE', 'Segoe UI', sans-serif; 
+            overflow: hidden; touch-action: none; user-select: none;
+        }
+        #game-container { position: relative; width: 100%; height: 100%; max-width: 600px; }
+        canvas { 
+            display: block; width: 100%; height: 100%; 
+            background: radial-gradient(circle at center, #3a1c71, #d76d77, #ffaf7b); 
+            box-shadow: 0 0 20px rgba(0,0,0,0.8); cursor: crosshair;
+        }
+        #ui { 
+            position: absolute; top: 15px; width: 100%; color: white; text-align: center; 
+            pointer-events: none; text-shadow: 2px 2px 0 #000, -1px -1px 0 #000; z-index: 10; 
+            display: flex; justify-content: space-between; padding: 0 20px; box-sizing: border-box;
+        }
+        h1, h2 { margin: 0; font-size: 32px; font-weight: 900; }
+        #lives { color: #ff4757; }
+        .crash-text { color: #fff; font-size: 45px; text-transform: uppercase; font-weight: 900; text-shadow: 4px 4px 0 #ff0000; }
+        
+        #start-btn {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            padding: 20px 40px; font-size: 30px; background: #ff4757; color: white;
+            border: 5px solid #fff; border-radius: 15px; cursor: pointer;
+            box-shadow: 0 10px 0 #c0392b, 0 15px 20px rgba(0,0,0,0.5); font-weight: 900; z-index: 20;
+            text-transform: uppercase; transform-origin: center; transition: all 0.1s;
+        }
+        #start-btn:active { transform: translate(-50%, -40%); box-shadow: 0 0px 0 #c0392b, 0 5px 10px rgba(0,0,0,0.5); }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <div id="ui">
+            <h1 id="score">Score: 0</h1>
+            <h2 id="lives">❤️❤️❤️</h2>
+        </div>
+        <button id="start-btn">START SLAPPING</button>
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const livesEl = document.getElementById('lives');
+const startBtn = document.getElementById('start-btn');
+
+function resizeCanvas() {
+    canvas.width = window.innerWidth > 600 ? 600 : window.innerWidth;
+    canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// --- LOAD PRE-CROPPED IMAGES ---
+const binsuImg = new Image(); binsuImg.crossOrigin = "anonymous";
+binsuImg.src = 'https://raw.githubusercontent.com/thesaching/flappy-binsu-game/refs/heads/main/binsuu.jpeg'; 
+
+const friendImg1 = new Image(); friendImg1.crossOrigin = "anonymous";
+friendImg1.src = 'https://raw.githubusercontent.com/thesaching/flappy-binsu-game/refs/heads/main/all1u.jpeg'; 
+
+const friendImg2 = new Image(); friendImg2.crossOrigin = "anonymous";
+friendImg2.src = 'https://raw.githubusercontent.com/thesaching/flappy-binsu-game/refs/heads/main/all2u.jpeg'; 
+
+// --- GAME VARIABLES ---
+let gameState = 'IDLE'; 
+let score = 0;
+let lives = 3;
+let frames = 0;
+let lastFathimaScore = 0;
+
+let targets = [];
+let swipeTrail = [];
+let floatingTexts = [];
+
+let isSwiping = false;
+let mouseX = 0, mouseY = 0;
+
+// --- AUDIO FUNCTIONS ---
+function initAudio() {
+    if ('speechSynthesis' in window) {
+        let unlock = new SpeechSynthesisUtterance(""); unlock.volume = 0; window.speechSynthesis.speak(unlock);
+    }
+}
+
+function playFathimaEcho() {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel(); 
+    for (let i = 0; i < 3; i++) {
+        let u = new SpeechSynthesisUtterance("Fathima");
+        u.volume = 1 - (i * 0.4); u.rate = 0.8; u.pitch = 1 - (i * 0.15); 
+        window.speechSynthesis.speak(u);
+    }
+}
+
+function playCrashSound() {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel(); 
+    let u = new SpeechSynthesisUtterance("thu sulemaga");
+    u.volume = 1.0; u.rate = 1.4; u.pitch = 0.8; 
+    window.speechSynthesis.speak(u);
+}
+
+// --- COMEDY EFFECTS ---
+const slapWords = ["SLAP!", "BAM!", "SMACK!", "YEET!", "BONK!", "WACK!"];
+
+function spawnFloatingText(x, y, isBinsu = false) {
+    let word = isBinsu ? "NOOOO!" : slapWords[Math.floor(Math.random() * slapWords.length)];
+    floatingTexts.push({
+        x: x, y: y, text: word, life: 25, color: isBinsu ? '#ff0000' : '#f1c40f',
+        vy: -3, scale: 1
+    });
+}
+
+// --- TARGET SPAWNER ---
+function throwTarget() {
+    let r = 50; 
+    let x = Math.random() * (canvas.width - r*2) + r;
+    
+    // SCALING DIFFICULTY: Speed scales up aggressively with score
+    let baseSpeed = 15 + (score * 0.4); // Much faster starting speed and higher scaling
+    
+    // Probability of Binsu increases as game goes on (caps at 35%)
+    let trapChance = Math.min(0.35, 0.15 + (score * 0.005));
+    let isBinsu = Math.random() < trapChance; 
+    
+    let img = isBinsu ? binsuImg : (Math.random() > 0.5 ? friendImg1 : friendImg2);
+    
+    targets.push({
+        x: x, y: canvas.height + 50, radius: r,
+        vx: (canvas.width/2 - x) * 0.04 + (Math.random() - 0.5) * 6, // Wider arcs
+        vy: -baseSpeed - Math.random() * 5,
+        gravity: 0.4 + (score * 0.01), // Gravity gets heavier so they fall faster
+        type: isBinsu ? 'binsu' : 'friend', img: img,
+        angle: 0, spin: (Math.random() - 0.5) * 0.3,
+        sliced: false
+    });
+}
+
+function updateLivesDisplay() {
+    let hearts = "";
+    for(let i=0; i<3; i++) hearts += i < lives ? "❤️" : "🖤";
+    livesEl.innerText = hearts;
+}
+
+// --- MAIN LOOP ---
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (gameState === 'PLAYING') {
+        frames++;
+
+        // SCALING DIFFICULTY: Spawn rate gets insanely fast
+        let throwRate = Math.max(12, 80 - Math.floor(score * 1.5)); 
+        
+        if (frames % throwRate === 0) throwTarget();
+        
+        // Multi-throws start happening earlier and more often
+        if (score > 10 && frames % Math.floor(throwRate * 1.5) === 0) throwTarget();
+        if (score > 30 && frames % Math.floor(throwRate * 2.2) === 0) throwTarget();
+
+        // UPDATE SWIPE TRAIL
+        if (isSwiping) {
+            swipeTrail.push({x: mouseX, y: mouseY, life: 8}); // Trail fades slightly faster
+        }
+        
+        if (swipeTrail.length > 1) {
+            ctx.beginPath();
+            ctx.moveTo(swipeTrail[0].x, swipeTrail[0].y);
+            for(let i=1; i<swipeTrail.length; i++) ctx.lineTo(swipeTrail[i].x, swipeTrail[i].y);
+            ctx.strokeStyle = '#fff'; ctx.lineWidth = 6; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+            ctx.shadowBlur = 15; ctx.shadowColor = '#00e5ff';
+            ctx.stroke();
+            ctx.shadowBlur = 0; 
+        }
+        
+        for(let i = swipeTrail.length - 1; i >= 0; i--) {
+            swipeTrail[i].life--;
+            if (swipeTrail[i].life <= 0) swipeTrail.splice(i, 1);
+        }
+
+        // UPDATE TARGETS
+        for (let i = targets.length - 1; i >= 0; i--) {
+            let t = targets[i];
+            
+            t.x += t.vx;
+            t.y += t.vy;
+            t.vy += t.gravity;
+            t.angle += t.spin;
+
+            // Collision Detection with tighter hitboxes
+            if (isSwiping && !t.sliced) {
+                let dist = Math.hypot(mouseX - t.x, mouseY - t.y);
+                if (dist < t.radius + 5) { // TIGHTER HITBOX: Must be accurate!
+                    t.sliced = true;
+                    
+                    if (t.type === 'binsu') {
+                        spawnFloatingText(t.x, t.y, true);
+                        triggerGameOver(true);
+                        break;
+                    } else {
+                        score++;
+                        scoreEl.innerText = "Score: " + score;
+                        spawnFloatingText(t.x, t.y, false);
+                        
+                        if (Math.floor(score / 10) > Math.floor(lastFathimaScore / 10)) {
+                            playFathimaEcho();
+                        }
+                        lastFathimaScore = score;
+                    }
+                }
+            }
+
+            // Draw Target
+            ctx.save();
+            ctx.translate(t.x, t.y);
+            ctx.rotate(t.angle);
+            
+            if (t.sliced && t.type === 'friend') {
+                t.vy += 3; // Drops out of the sky faster
+                ctx.globalAlpha = 0.5; 
+            }
+            
+            if (t.img.complete) {
+                ctx.beginPath();
+                ctx.arc(0, 0, t.radius, 0, Math.PI * 2);
+                ctx.clip(); 
+                ctx.drawImage(t.img, -t.radius, -t.radius, t.radius*2, t.radius*2);
+                
+                ctx.strokeStyle = t.type === 'binsu' ? '#ff0000' : '#fff';
+                ctx.lineWidth = 6;
+                ctx.stroke();
+            }
+            ctx.restore();
+
+            // Object fell off screen
+            if (t.y > canvas.height + 100) {
+                if (!t.sliced && t.type === 'friend') {
+                    lives--;
+                    updateLivesDisplay();
+                    if (lives <= 0) triggerGameOver(false);
+                }
+                targets.splice(i, 1);
+            }
+        }
+
+        // UPDATE FLOATING TEXT
+        for (let i = floatingTexts.length - 1; i >= 0; i--) {
+            let txt = floatingTexts[i];
+            txt.y += txt.vy;
+            txt.scale += 0.08;
+            txt.life--;
+            
+            ctx.fillStyle = txt.color;
+            ctx.font = `900 ${20 * txt.scale}px 'Comic Sans MS'`;
+            ctx.textAlign = "center";
+            ctx.strokeStyle = "#000"; ctx.lineWidth = 4;
+            ctx.strokeText(txt.text, txt.x, txt.y);
+            ctx.fillText(txt.text, txt.x, txt.y);
+            
+            if (txt.life <= 0) floatingTexts.splice(i, 1);
+        }
+    }
+
+    if (gameState === 'GAMEOVER') {
+        ctx.fillStyle = "rgba(255, 0, 0, 0.4)"; 
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    requestAnimationFrame(draw);
+}
+
+// --- INPUT LOGIC ---
+function updateMouse(e) {
+    let rect = canvas.getBoundingClientRect();
+    if (e.touches) {
+        mouseX = e.touches[0].clientX - rect.left;
+        mouseY = e.touches[0].clientY - rect.top;
+    } else {
+        mouseX = e.clientX - rect.left;
+        mouseY = e.clientY - rect.top;
+    }
+}
+
+canvas.addEventListener('mousedown', (e) => { isSwiping = true; updateMouse(e); swipeTrail = []; });
+canvas.addEventListener('mousemove', (e) => { if(isSwiping) updateMouse(e); });
+window.addEventListener('mouseup', () => { isSwiping = false; swipeTrail = []; });
+
+canvas.addEventListener('touchstart', (e) => { e.preventDefault(); isSwiping = true; updateMouse(e); swipeTrail = []; }, {passive: false});
+canvas.addEventListener('touchmove', (e) => { e.preventDefault(); if(isSwiping) updateMouse(e); }, {passive: false});
+window.addEventListener('touchend', () => { isSwiping = false; swipeTrail = []; });
+
+startBtn.addEventListener('click', () => {
+    initAudio();
+    gameState = 'PLAYING';
+    score = 0; lives = 3; frames = 0; lastFathimaScore = 0;
+    targets = []; swipeTrail = []; floatingTexts = [];
+    
+    scoreEl.innerText = "Score: 0"; updateLivesDisplay();
+    
+    let oldMsg = document.getElementById('death-msg');
+    if(oldMsg) oldMsg.remove();
+    
+    startBtn.style.display = "none";
+});
+
+function triggerGameOver(slappedBinsu) {
+    if(gameState === 'GAMEOVER') return;
+    gameState = 'GAMEOVER';
+    isSwiping = false;
+    swipeTrail = [];
+    
+    playCrashSound();
+    
+    let msg = document.createElement('div');
+    msg.id = 'death-msg';
+    msg.style.position = 'absolute'; msg.style.top = '40%'; msg.style.width = '100%'; msg.style.textAlign = 'center';
+    msg.innerHTML = slappedBinsu 
+        ? "<div class='crash-text'>YOU SLAPPED BINSU!</div><br><span style='font-size:40px; font-weight:bold; color:red; text-shadow:2px 2px 0 #000;'>thu sulemaga</span>" 
+        : "<div class='crash-text'>YOU DROPPED THEM!</div><br><span style='font-size:40px; font-weight:bold; color:red; text-shadow:2px 2px 0 #000;'>thu sulemaga</span>";
+    
+    document.getElementById('game-container').appendChild(msg);
+    
+    startBtn.innerText = "TRY AGAIN";
+    startBtn.style.top = "70%";
+    startBtn.style.display = "block";
+}
+
+draw();
+</script>
+</body>
+</html>
